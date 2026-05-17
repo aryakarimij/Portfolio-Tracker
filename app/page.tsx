@@ -48,47 +48,20 @@ const initialPortfolios: Portfolio[] = [
 
 // Removed hardcoded prices, now fetched via Finnhub API
 
-const chartData = {
-  day: [
-    { label: "09:00", gain: 5 },
-    { label: "11:00", gain: 18 },
-    { label: "13:00", gain: -8 },
-    { label: "15:00", gain: 25 },
-    { label: "17:00", gain: 42 },
-  ],
-  week: [
-    { label: "Mon", gain: 20 },
-    { label: "Tue", gain: -15 },
-    { label: "Wed", gain: 40 },
-    { label: "Thu", gain: 10 },
-    { label: "Fri", gain: 55 },
-  ],
-  month: [
-    { label: "Week 1", gain: 60 },
-    { label: "Week 2", gain: 120 },
-    { label: "Week 3", gain: 90 },
-    { label: "Week 4", gain: 210 },
-  ],
-  ytd: [
-    { label: "Jan", gain: 100 },
-    { label: "Feb", gain: 80 },
-    { label: "Mar", gain: 220 },
-    { label: "Apr", gain: 190 },
-    { label: "May", gain: 310 },
-  ],
-  all: [
-    { label: "2021", gain: 300 },
-    { label: "2022", gain: -120 },
-    { label: "2023", gain: 500 },
-    { label: "2024", gain: 850 },
-    { label: "2025", gain: 1020 },
-  ],
-};
+// Removed static chartData
 
 const chartColors = ["#38bdf8", "#a78bfa", "#f472b6", "#34d399", "#fbbf24"];
 
 function formatEuro(value: number) {
   return `€${value.toFixed(2)}`;
+}
+
+function formatCurrency(value: number, currency: string) {
+  if (currency === "EUR") return `€${value.toFixed(2)}`;
+  if (currency === "USD") return `${value.toFixed(2)}`;
+  if (currency === "SEK") return `${value.toFixed(2)} kr`;
+  if (currency === "GBP") return `£${value.toFixed(2)}`;
+  return `${value.toFixed(2)} ${currency}`;
 }
 
 function formatPercent(value: number) {
@@ -101,8 +74,8 @@ function titleCase(value: string) {
 
 function buildHoldings(
   transactions: Transaction[],
-  currentPrices: Record<string, number>,
-  previousClosePrices: Record<string, number>
+  quotes: Record<string, { price: number; prevClose: number; currency: string }>,
+  rates: Record<string, number>
 ) {
   const grouped = new Map<string, Transaction[]>();
 
@@ -150,15 +123,24 @@ function buildHoldings(
     if (!firstBuy) continue;
 
     if (remainingQuantity > 0) {
-      const currentPrice = currentPrices[ticker] || averagePrice;
-      const previousClose = previousClosePrices[ticker] || currentPrice;
-      const currentValue = remainingQuantity * currentPrice;
-      const costBasis = remainingQuantity * averagePrice;
-      const previousValue = remainingQuantity * previousClose;
+      const quote = quotes[ticker];
+      const currentPrice = quote ? quote.price : averagePrice;
+      const previousClose = quote ? quote.prevClose : currentPrice;
+      const currency = quote ? quote.currency : "EUR";
+      const rateToEur = rates[currency] || 1;
+
+      const currentValueNative = remainingQuantity * currentPrice;
+      const costBasisNative = remainingQuantity * averagePrice;
+      const previousValueNative = remainingQuantity * previousClose;
+
+      const currentValueEur = currentValueNative * rateToEur;
+      const costBasisEur = costBasisNative * rateToEur;
+      const previousValueEur = previousValueNative * rateToEur;
 
       openHoldings.push({
         name: firstBuy.name,
         ticker,
+        currency,
         type:
           firstBuy.assetType === "derivative"
             ? titleCase(firstBuy.derivativeType || "derivative")
@@ -170,20 +152,29 @@ function buildHoldings(
         currentPrice,
         previousClose,
         acquisitionDate: firstBuy.date,
-        currentValue,
-        dayGainEuro: currentValue - previousValue,
+        currentValue: currentValueEur,
+        dayGainEuro: currentValueEur - previousValueEur,
         dayGainPercent:
-          previousValue > 0
-            ? ((currentValue - previousValue) / previousValue) * 100
+          previousValueEur > 0
+            ? ((currentValueEur - previousValueEur) / previousValueEur) * 100
             : 0,
-        totalGainEuro: currentValue - costBasis,
+        totalGainEuro: currentValueEur - costBasisEur,
         totalGainPercent:
-          costBasis > 0 ? ((currentValue - costBasis) / costBasis) * 100 : 0,
+          costBasisEur > 0 ? ((currentValueEur - costBasisEur) / costBasisEur) * 100 : 0,
+        costBasisEur,
       });
     } else {
+      const quote = quotes[ticker];
+      const currency = quote ? quote.currency : "EUR";
+      const rateToEur = rates[currency] || 1;
+      
+      const totalSellValueEur = totalSellValue * rateToEur;
+      const totalBuyCostEur = totalBuyCost * rateToEur;
+
       closedHoldings.push({
         name: firstBuy.name,
         ticker,
+        currency,
         type:
           firstBuy.assetType === "derivative"
             ? titleCase(firstBuy.derivativeType || "derivative")
@@ -195,7 +186,7 @@ function buildHoldings(
         sellPrice: lastSell?.price || 0,
         acquisitionDate: firstBuy.date,
         sellingDate: lastSell?.date || "",
-        realizedGainEuro: totalSellValue - totalBuyCost,
+        realizedGainEuro: totalSellValueEur - totalBuyCostEur,
         realizedGainPercent:
           totalBuyCost > 0
             ? ((totalSellValue - totalBuyCost) / totalBuyCost) * 100
@@ -212,17 +203,16 @@ export default function Home() {
   const [activePortfolioId, setActivePortfolioId] = useState(1);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  const [finnhubKey, setFinnhubKey] = useState("");
-  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
-  const [livePreviousCloses, setLivePreviousCloses] = useState<Record<string, number>>({});
+  const [quotes, setQuotes] = useState<Record<string, { price: number; prevClose: number; currency: string }>>({});
+  const [rates, setRates] = useState<Record<string, number>>({});
   const [isFetchingPrices, setIsFetchingPrices] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  useEffect(() => {
-    const key = localStorage.getItem("finnhubKey");
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (key) setFinnhubKey(key);
+  const [historicalData, setHistoricalData] = useState<Record<string, { t: number[]; c: number[]; currency: string }>>({});
+  const [historicalRates, setHistoricalRates] = useState<Record<string, { t: number[]; c: number[] }>>({});
+  const [isFetchingHistorical, setIsFetchingHistorical] = useState(false);
 
+  useEffect(() => {
     const savedPortfolios = localStorage.getItem("portfolios");
     if (savedPortfolios) {
       try {
@@ -248,37 +238,193 @@ export default function Home() {
   }, [portfolios, isLoaded]);
 
   useEffect(() => {
-    if (!finnhubKey) return;
-    const fetchPrices = async () => {
+    const fetchQuotes = async () => {
       setIsFetchingPrices(true);
       const currentActivePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
+      if (!currentActivePortfolio || currentActivePortfolio.transactions.length === 0) {
+        setIsFetchingPrices(false);
+        return;
+      }
       const tickersToFetch = Array.from(new Set(currentActivePortfolio.transactions.map(t => t.ticker)));
-      const newPrices: Record<string, number> = {};
-      const newPrevCloses: Record<string, number> = {};
       
-      await Promise.all(tickersToFetch.map(async (ticker) => {
-        try {
-          const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${finnhubKey}`);
-          if (res.ok) {
-            const data = await res.json();
-            if (data && typeof data.c === 'number' && data.c !== 0) {
-              newPrices[ticker] = data.c;
-              newPrevCloses[ticker] = data.pc;
-            }
-          }
-        } catch (e) {
-          console.error("Failed to fetch quote for", ticker, e);
+      try {
+        const res = await fetch(`/api/yahoo/quote?symbols=${tickersToFetch.join(",")}`);
+        if (res.ok) {
+          const data = await res.json();
+          setQuotes(prev => ({ ...prev, ...data.quotes }));
+          setRates(prev => ({ ...prev, ...data.rates }));
         }
-      }));
-      setLivePrices(prev => ({ ...prev, ...newPrices }));
-      setLivePreviousCloses(prev => ({ ...prev, ...newPrevCloses }));
+      } catch (e) {
+        console.error("Failed to fetch quotes", e);
+      }
       setIsFetchingPrices(false);
     };
     
-    fetchPrices();
-    const interval = setInterval(fetchPrices, 60000);
+    fetchQuotes();
+    const interval = setInterval(fetchQuotes, 60000);
     return () => clearInterval(interval);
-  }, [finnhubKey, portfolios, activePortfolioId]);
+  }, [portfolios, activePortfolioId]);
+
+  useEffect(() => {
+    const currentActivePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
+    if (!currentActivePortfolio || currentActivePortfolio.transactions.length === 0) return;
+
+    const earliestDateStr = currentActivePortfolio.transactions.reduce((earliest, t) => {
+      return t.date < earliest ? t.date : earliest;
+    }, currentActivePortfolio.transactions[0].date);
+
+    const earliestTimestamp = Math.floor(new Date(earliestDateStr).getTime() / 1000) - (3 * 86400);
+    const currentTimestamp = Math.floor(Date.now() / 1000);
+
+    const tickersToFetch = Array.from(new Set(currentActivePortfolio.transactions.map(t => t.ticker)));
+    
+    const fetchHistoricalData = async () => {
+      setIsFetchingHistorical(true);
+      try {
+        const res = await fetch(`/api/yahoo/history?symbols=${tickersToFetch.join(",")}&from=${earliestTimestamp}&to=${currentTimestamp}`);
+        if (res.ok) {
+          const data = await res.json();
+          setHistoricalData(prev => ({ ...prev, ...data.history }));
+          setHistoricalRates(prev => ({ ...prev, ...data.ratesHistory }));
+        }
+      } catch (e) {
+        console.error("Failed to fetch historical data", e);
+      }
+      setIsFetchingHistorical(false);
+    };
+
+    fetchHistoricalData();
+  }, [portfolios, activePortfolioId]);
+
+  // eslint-disable-next-line react-hooks/purity
+  const dynamicChartData = useMemo(() => {
+    // eslint-disable-next-line react-hooks/purity
+    const defaultData = { day: [], week: [], month: [], ytd: [], all: [] };
+    const currentActivePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
+    if (!currentActivePortfolio || currentActivePortfolio.transactions.length === 0) return defaultData;
+    
+    const txs = currentActivePortfolio.transactions;
+    const earliestDateStr = txs.reduce((earliest, t) => {
+      return t.date < earliest ? t.date : earliest;
+    }, txs[0].date);
+    
+    const earliestTime = new Date(`${earliestDateStr}T00:00:00Z`).getTime();
+    // eslint-disable-next-line react-hooks/purity
+    const currentTime = Date.now();
+    
+    const dailyTimestamps: number[] = [];
+    for (let t = earliestTime; t <= currentTime; t += 86400000) {
+      dailyTimestamps.push(new Date(new Date(t).toISOString().split('T')[0] + 'T00:00:00Z').getTime());
+    }
+    const todayTime = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00Z').getTime();
+    if (dailyTimestamps.length === 0 || dailyTimestamps[dailyTimestamps.length - 1] !== todayTime) {
+      dailyTimestamps.push(todayTime);
+    }
+    
+    const sortedTx = [...txs].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const timelineData: { date: number; label: string; gain: number }[] = [];
+    const currentHoldings: Record<string, { qty: number; investedEur: number }> = {};
+    
+    const getHistoricalValue = (ticker: string, ts: number) => {
+      const hData = historicalData[ticker];
+      const targetS = Math.floor(ts / 1000);
+      let closestPrice = quotes[ticker]?.price || 0;
+      let currency = quotes[ticker]?.currency || "EUR";
+      
+      if (hData && hData.t && hData.t.length > 0) {
+        currency = hData.currency;
+        closestPrice = hData.c[0];
+        for (let i = 0; i < hData.t.length; i++) {
+          if (hData.t[i] <= targetS + 86400) {
+            closestPrice = hData.c[i];
+          } else {
+            break;
+          }
+        }
+      }
+      
+      let rateToEur = 1;
+      if (currency !== "EUR") {
+        const rData = historicalRates[currency];
+        if (rData && rData.t && rData.t.length > 0) {
+          rateToEur = rData.c[0];
+          for (let i = 0; i < rData.t.length; i++) {
+            if (rData.t[i] <= targetS + 86400) {
+              rateToEur = rData.c[i];
+            } else {
+              break;
+            }
+          }
+        } else {
+          rateToEur = rates[currency] || 1;
+        }
+      }
+      
+      return { priceNative: closestPrice, rateToEur };
+    };
+    
+    dailyTimestamps.forEach(ts => {
+      const dateStr = new Date(ts).toISOString().split('T')[0];
+      const txsToday = sortedTx.filter(t => t.date === dateStr);
+      
+      txsToday.forEach(tx => {
+        if (!currentHoldings[tx.ticker]) currentHoldings[tx.ticker] = { qty: 0, investedEur: 0 };
+        const quote = quotes[tx.ticker];
+        const currency = quote ? quote.currency : "EUR";
+        const rateToEur = rates[currency] || 1;
+        
+        if (tx.action === 'buy') {
+          currentHoldings[tx.ticker].qty += tx.quantity;
+          const investedNative = (tx.quantity * tx.price) + tx.commission;
+          currentHoldings[tx.ticker].investedEur += investedNative * rateToEur;
+        } else if (tx.action === 'sell') {
+          if (currentHoldings[tx.ticker].qty > 0) {
+            const avgCostEur = currentHoldings[tx.ticker].investedEur / currentHoldings[tx.ticker].qty;
+            currentHoldings[tx.ticker].investedEur -= tx.quantity * avgCostEur;
+            currentHoldings[tx.ticker].qty -= tx.quantity;
+          }
+        }
+      });
+      
+      let totalValueEur = 0;
+      let totalInvestedEur = 0;
+      for (const [ticker, holding] of Object.entries(currentHoldings)) {
+        if (holding.qty > 0) {
+          const { priceNative, rateToEur } = getHistoricalValue(ticker, ts);
+          totalValueEur += (holding.qty * priceNative) * rateToEur;
+          totalInvestedEur += holding.investedEur;
+        }
+      }
+      
+      const gain = totalValueEur - totalInvestedEur;
+      timelineData.push({
+        date: ts,
+        label: new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
+        gain: Math.round(gain * 100) / 100,
+      });
+    });
+    
+    const all = timelineData;
+    
+    const currentYear = new Date().getFullYear();
+    const ytdStart = new Date(`${currentYear}-01-01T00:00:00Z`).getTime();
+    let ytd = timelineData.filter(d => d.date >= ytdStart);
+    if (ytd.length === 0 && timelineData.length > 0) ytd = [timelineData[timelineData.length - 1]];
+    
+    const monthStart = new Date();
+    monthStart.setMonth(monthStart.getMonth() - 1);
+    let month = timelineData.filter(d => d.date >= monthStart.getTime());
+    if (month.length === 0 && timelineData.length > 0) month = [timelineData[timelineData.length - 1]];
+    
+    const weekStart = new Date();
+    weekStart.setDate(weekStart.getDate() - 7);
+    let week = timelineData.filter(d => d.date >= weekStart.getTime());
+    if (week.length === 0 && timelineData.length > 0) week = [timelineData[timelineData.length - 1]];
+    
+    const day = week; // Fallback for intraday
+    
+    return { day, week, month, ytd, all };
+  }, [portfolios, activePortfolioId, historicalData, historicalRates, quotes, rates]);
 
   const activePortfolio =
     portfolios.find((portfolio) => portfolio.id === activePortfolioId) ||
@@ -302,6 +448,7 @@ export default function Home() {
   const [openEditMode, setOpenEditMode] = useState(false);
   const [closedEditMode, setClosedEditMode] = useState(false);
   const [editingTicker, setEditingTicker] = useState<string | null>(null);
+  const [formCurrency, setFormCurrency] = useState<string | null>(null);
 
   const [action, setAction] = useState<TransactionAction>("buy");
   const [assetType, setAssetType] = useState<AssetType>("stock");
@@ -314,9 +461,35 @@ export default function Home() {
   const [commission, setCommission] = useState("");
   const [date, setDate] = useState("");
 
+  useEffect(() => {
+    if (ticker.trim().length >= 2) {
+      const existingQuote = quotes[ticker.toUpperCase()];
+      if (existingQuote) {
+        setFormCurrency(existingQuote.currency);
+      } else {
+        const fetchQuote = async () => {
+          try {
+            const res = await fetch(`/api/yahoo/quote?symbols=${ticker.toUpperCase()}`);
+            const data = await res.json();
+            if (data.quotes && data.quotes[ticker.toUpperCase()]) {
+              setFormCurrency(data.quotes[ticker.toUpperCase()].currency);
+            } else {
+              setFormCurrency(null);
+            }
+          } catch (e) {
+            setFormCurrency(null);
+          }
+        };
+        fetchQuote();
+      }
+    } else {
+      setFormCurrency(null);
+    }
+  }, [ticker, quotes]);
+
   const { openHoldings, closedHoldings } = useMemo(
-    () => buildHoldings(transactions, livePrices, livePreviousCloses),
-    [transactions, livePrices, livePreviousCloses],
+    () => buildHoldings(transactions, quotes, rates),
+    [transactions, quotes, rates],
   );
 
   const portfolioValue = openHoldings.reduce(
@@ -325,7 +498,7 @@ export default function Home() {
   );
 
   const amountInvested = openHoldings.reduce(
-    (total, holding) => total + holding.quantity * holding.averagePrice,
+    (total, holding) => total + holding.costBasisEur,
     0,
   );
 
@@ -529,37 +702,11 @@ export default function Home() {
                   +
                 </button>
 
-                <button
-                  onClick={() => setShowSettings(!showSettings)}
-                  className={`rounded-lg px-4 py-2 text-sm font-bold ${
-                    showSettings ? "bg-white text-slate-950" : "bg-slate-800 text-slate-300"
-                  }`}
-                >
-                  ⚙️ API Key
-                </button>
+
               </div>
             )}
 
-            {showSettings && (
-              <div className="mt-4 rounded-xl bg-slate-900 p-4 max-w-md border border-slate-800">
-                <label className="text-sm font-bold text-slate-300">Finnhub API Key (Live Prices)</label>
-                <div className="mt-2 flex gap-2">
-                  <input
-                    type="password"
-                    value={finnhubKey}
-                    onChange={(e) => {
-                      setFinnhubKey(e.target.value);
-                      localStorage.setItem("finnhubKey", e.target.value);
-                    }}
-                    placeholder="Enter API Key"
-                    className="flex-1 rounded-lg bg-slate-800 p-2 text-white outline-none focus:ring-2 focus:ring-emerald-500"
-                  />
-                </div>
-                <p className="mt-2 text-xs text-slate-500">
-                  Get a free key at <a href="https://finnhub.io" target="_blank" rel="noreferrer" className="text-emerald-500 hover:underline">finnhub.io</a>. Key is saved locally.
-                </p>
-              </div>
-            )}
+
 
             <p className="mt-4 text-slate-300">
               Track your stocks, ETFs, and derivatives in one place.
@@ -650,7 +797,10 @@ export default function Home() {
         <div className="mt-10 grid gap-6 lg:grid-cols-2">
           <section className="rounded-2xl bg-slate-900 p-6">
             <div className="flex flex-wrap items-center justify-between gap-4">
-              <h2 className="text-2xl font-bold">Gain Chart</h2>
+              <h2 className="text-2xl font-bold flex items-center gap-3">
+                Gain Chart
+                {isFetchingHistorical && <span className="text-sm font-normal text-emerald-500 animate-pulse">Loading historical data...</span>}
+              </h2>
 
               <div className="flex flex-wrap gap-2">
                 {(["day", "week", "month", "ytd", "all"] as TimeFrame[]).map(
@@ -681,7 +831,7 @@ export default function Home() {
 
             <div className="mt-6 h-72">
               <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData[timeFrame]}>
+                <LineChart data={dynamicChartData[timeFrame]}>
                   <XAxis dataKey="label" stroke="#94a3b8" />
                   <YAxis stroke="#94a3b8" />
                   <Tooltip />
@@ -875,7 +1025,7 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="text-sm text-slate-400">Price</label>
+                <label className="text-sm text-slate-400">Price {formCurrency ? `(${formCurrency})` : ""}</label>
                 <input
                   type="number"
                   step="any"
@@ -888,7 +1038,7 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="text-sm text-slate-400">Commission</label>
+                <label className="text-sm text-slate-400">Commission {formCurrency ? `(${formCurrency})` : ""}</label>
                 <input
                   type="number"
                   step="any"
@@ -965,7 +1115,7 @@ export default function Home() {
                   >
                     <td className="py-4 font-medium">{holding.name}</td>
                     <td className="py-4">{holding.ticker}</td>
-                    <td className="py-4">{formatEuro(holding.currentPrice)}</td>
+                    <td className="py-4">{formatCurrency(holding.currentPrice, holding.currency)}</td>
                     <td className="py-4">
                       {formatEuro(holding.dayGainEuro)}{" "}
                       <span className="text-slate-400">
@@ -998,7 +1148,7 @@ export default function Home() {
                         <td className="py-4">{holding.type}</td>
                         <td className="py-4">{holding.quantity}</td>
                         <td className="py-4">
-                          {formatEuro(holding.averagePrice)}
+                          {formatCurrency(holding.averagePrice, holding.currency)}
                         </td>
                         <td className="py-4">{holding.acquisitionDate}</td>
                         <td className="py-4">
@@ -1093,7 +1243,7 @@ export default function Home() {
                   >
                     <td className="py-4 font-medium">{holding.name}</td>
                     <td className="py-4">{holding.ticker}</td>
-                    <td className="py-4">{formatEuro(holding.sellPrice)}</td>
+                    <td className="py-4">{formatCurrency(holding.sellPrice, holding.currency)}</td>
                     <td className="py-4">
                       {formatEuro(holding.realizedGainEuro)}{" "}
                       <span className="text-slate-400">
@@ -1126,7 +1276,7 @@ export default function Home() {
                         <td className="py-4">{holding.type}</td>
                         <td className="py-4">{holding.quantity}</td>
                         <td className="py-4">
-                          {formatEuro(holding.averagePrice)}
+                          {formatCurrency(holding.averagePrice, holding.currency)}
                         </td>
                         <td className="py-4">{holding.acquisitionDate}</td>
                         <td className="py-4">{holding.sellingDate}</td>
