@@ -42,68 +42,6 @@ const initialPortfolios: Portfolio[] = [
   {
     id: 1,
     name: "My Portfolio",
-    transactions: [
-      {
-        id: 1,
-        action: "buy",
-        assetType: "stock",
-        name: "Apple",
-        ticker: "AAPL",
-        quantity: 10,
-        price: 180,
-        commission: 2,
-        date: "2024-02-10",
-      },
-      {
-        id: 2,
-        action: "buy",
-        assetType: "stock",
-        name: "S&P 500 ETF",
-        ticker: "VUAA",
-        quantity: 5,
-        price: 450,
-        commission: 2,
-        date: "2024-05-20",
-      },
-      {
-        id: 3,
-        action: "buy",
-        assetType: "derivative",
-        derivativeType: "knockout",
-        name: "Example Knockout",
-        ticker: "DE000TEST123",
-        quantity: 100,
-        price: 2.5,
-        commission: 1,
-        date: "2025-01-15",
-      },
-      {
-        id: 4,
-        action: "buy",
-        assetType: "stock",
-        name: "Tesla",
-        ticker: "TSLA",
-        quantity: 4,
-        price: 220,
-        commission: 2,
-        date: "2023-08-01",
-      },
-      {
-        id: 5,
-        action: "sell",
-        assetType: "stock",
-        name: "Tesla",
-        ticker: "TSLA",
-        quantity: 4,
-        price: 250,
-        commission: 2,
-        date: "2024-03-12",
-      },
-    ],
-  },
-  {
-    id: 2,
-    name: "Girlfriend Portfolio",
     transactions: [],
   },
 ];
@@ -272,6 +210,7 @@ function buildHoldings(
 export default function Home() {
   const [portfolios, setPortfolios] = useState<Portfolio[]>(initialPortfolios);
   const [activePortfolioId, setActivePortfolioId] = useState(1);
+  const [isLoaded, setIsLoaded] = useState(false);
 
   const [finnhubKey, setFinnhubKey] = useState("");
   const [livePrices, setLivePrices] = useState<Record<string, number>>({});
@@ -283,7 +222,30 @@ export default function Home() {
     const key = localStorage.getItem("finnhubKey");
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (key) setFinnhubKey(key);
+
+    const savedPortfolios = localStorage.getItem("portfolios");
+    if (savedPortfolios) {
+      try {
+        const parsed = JSON.parse(savedPortfolios);
+        if (parsed.length > 0) {
+          // eslint-disable-next-line react-hooks/set-state-in-effect
+          setPortfolios(parsed);
+          // eslint-disable-next-line react-hooks/set-state-in-effect
+          setActivePortfolioId(parsed[0].id);
+        }
+      } catch (e) {
+        console.error("Failed to parse saved portfolios");
+      }
+    }
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setIsLoaded(true);
   }, []);
+
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem("portfolios", JSON.stringify(portfolios));
+    }
+  }, [portfolios, isLoaded]);
 
   useEffect(() => {
     if (!finnhubKey) return;
