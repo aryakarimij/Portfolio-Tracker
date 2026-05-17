@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import {
   Cell,
   Line,
@@ -108,17 +108,7 @@ const initialPortfolios: Portfolio[] = [
   },
 ];
 
-const currentPrices: Record<string, number> = {
-  AAPL: 195,
-  VUAA: 470,
-  DE000TEST123: 2.8,
-};
-
-const previousClosePrices: Record<string, number> = {
-  AAPL: 192,
-  VUAA: 466,
-  DE000TEST123: 2.9,
-};
+// Removed hardcoded prices, now fetched via Finnhub API
 
 const chartData = {
   day: [
@@ -171,7 +161,11 @@ function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function buildHoldings(transactions: Transaction[]) {
+function buildHoldings(
+  transactions: Transaction[],
+  currentPrices: Record<string, number>,
+  previousClosePrices: Record<string, number>
+) {
   const grouped = new Map<string, Transaction[]>();
 
   transactions.forEach((transaction) => {
@@ -279,6 +273,51 @@ export default function Home() {
   const [portfolios, setPortfolios] = useState<Portfolio[]>(initialPortfolios);
   const [activePortfolioId, setActivePortfolioId] = useState(1);
 
+  const [finnhubKey, setFinnhubKey] = useState("");
+  const [livePrices, setLivePrices] = useState<Record<string, number>>({});
+  const [livePreviousCloses, setLivePreviousCloses] = useState<Record<string, number>>({});
+  const [isFetchingPrices, setIsFetchingPrices] = useState(false);
+  const [showSettings, setShowSettings] = useState(false);
+
+  useEffect(() => {
+    const key = localStorage.getItem("finnhubKey");
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    if (key) setFinnhubKey(key);
+  }, []);
+
+  useEffect(() => {
+    if (!finnhubKey) return;
+    const fetchPrices = async () => {
+      setIsFetchingPrices(true);
+      const currentActivePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
+      const tickersToFetch = Array.from(new Set(currentActivePortfolio.transactions.map(t => t.ticker)));
+      const newPrices: Record<string, number> = {};
+      const newPrevCloses: Record<string, number> = {};
+      
+      await Promise.all(tickersToFetch.map(async (ticker) => {
+        try {
+          const res = await fetch(`https://finnhub.io/api/v1/quote?symbol=${ticker}&token=${finnhubKey}`);
+          if (res.ok) {
+            const data = await res.json();
+            if (data && typeof data.c === 'number' && data.c !== 0) {
+              newPrices[ticker] = data.c;
+              newPrevCloses[ticker] = data.pc;
+            }
+          }
+        } catch (e) {
+          console.error("Failed to fetch quote for", ticker, e);
+        }
+      }));
+      setLivePrices(prev => ({ ...prev, ...newPrices }));
+      setLivePreviousCloses(prev => ({ ...prev, ...newPrevCloses }));
+      setIsFetchingPrices(false);
+    };
+    
+    fetchPrices();
+    const interval = setInterval(fetchPrices, 60000);
+    return () => clearInterval(interval);
+  }, [finnhubKey, portfolios, activePortfolioId]);
+
   const activePortfolio =
     portfolios.find((portfolio) => portfolio.id === activePortfolioId) ||
     portfolios[0];
@@ -314,8 +353,8 @@ export default function Home() {
   const [date, setDate] = useState("");
 
   const { openHoldings, closedHoldings } = useMemo(
-    () => buildHoldings(transactions),
-    [transactions],
+    () => buildHoldings(transactions, livePrices, livePreviousCloses),
+    [transactions, livePrices, livePreviousCloses],
   );
 
   const portfolioValue = openHoldings.reduce(
@@ -527,11 +566,42 @@ export default function Home() {
                 >
                   +
                 </button>
+
+                <button
+                  onClick={() => setShowSettings(!showSettings)}
+                  className={`rounded-lg px-4 py-2 text-sm font-bold ${
+                    showSettings ? "bg-white text-slate-950" : "bg-slate-800 text-slate-300"
+                  }`}
+                >
+                  ⚙️ API Key
+                </button>
+              </div>
+            )}
+
+            {showSettings && (
+              <div className="mt-4 rounded-xl bg-slate-900 p-4 max-w-md border border-slate-800">
+                <label className="text-sm font-bold text-slate-300">Finnhub API Key (Live Prices)</label>
+                <div className="mt-2 flex gap-2">
+                  <input
+                    type="password"
+                    value={finnhubKey}
+                    onChange={(e) => {
+                      setFinnhubKey(e.target.value);
+                      localStorage.setItem("finnhubKey", e.target.value);
+                    }}
+                    placeholder="Enter API Key"
+                    className="flex-1 rounded-lg bg-slate-800 p-2 text-white outline-none focus:ring-2 focus:ring-emerald-500"
+                  />
+                </div>
+                <p className="mt-2 text-xs text-slate-500">
+                  Get a free key at <a href="https://finnhub.io" target="_blank" rel="noreferrer" className="text-emerald-500 hover:underline">finnhub.io</a>. Key is saved locally.
+                </p>
               </div>
             )}
 
             <p className="mt-4 text-slate-300">
               Track your stocks, ETFs, and derivatives in one place.
+              {isFetchingPrices && <span className="ml-3 text-emerald-500 text-sm animate-pulse">Fetching live prices...</span>}
             </p>
           </div>
 
