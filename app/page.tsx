@@ -46,10 +46,6 @@ const initialPortfolios: Portfolio[] = [
   },
 ];
 
-// Removed hardcoded prices, now fetched via Finnhub API
-
-// Removed static chartData
-
 const chartColors = ["#38bdf8", "#a78bfa", "#f472b6", "#34d399", "#fbbf24"];
 
 function formatEuro(value: number) {
@@ -68,14 +64,23 @@ function formatPercent(value: number) {
   return `${value.toFixed(2)}%`;
 }
 
+function getGainColor(value: number) {
+  if (value > 0) return "text-emerald-400";
+  if (value < 0) return "text-red-400";
+  return "text-slate-400";
+}
+
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function buildHoldings(
   transactions: Transaction[],
-  quotes: Record<string, { price: number; prevClose: number; currency: string }>,
-  rates: Record<string, number>
+  quotes: Record<
+    string,
+    { price: number; prevClose: number; currency: string }
+  >,
+  rates: Record<string, number>,
 ) {
   const grouped = new Map<string, Transaction[]>();
 
@@ -160,14 +165,16 @@ function buildHoldings(
             : 0,
         totalGainEuro: currentValueEur - costBasisEur,
         totalGainPercent:
-          costBasisEur > 0 ? ((currentValueEur - costBasisEur) / costBasisEur) * 100 : 0,
+          costBasisEur > 0
+            ? ((currentValueEur - costBasisEur) / costBasisEur) * 100
+            : 0,
         costBasisEur,
       });
     } else {
       const quote = quotes[ticker];
       const currency = quote ? quote.currency : "EUR";
       const rateToEur = rates[currency] || 1;
-      
+
       const totalSellValueEur = totalSellValue * rateToEur;
       const totalBuyCostEur = totalBuyCost * rateToEur;
 
@@ -203,13 +210,19 @@ export default function Home() {
   const [activePortfolioId, setActivePortfolioId] = useState(1);
   const [isLoaded, setIsLoaded] = useState(false);
 
-  const [quotes, setQuotes] = useState<Record<string, { price: number; prevClose: number; currency: string }>>({});
+  const [quotes, setQuotes] = useState<
+    Record<string, { price: number; prevClose: number; currency: string }>
+  >({});
   const [rates, setRates] = useState<Record<string, number>>({});
   const [isFetchingPrices, setIsFetchingPrices] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
 
-  const [historicalData, setHistoricalData] = useState<Record<string, { t: number[]; c: number[]; currency: string }>>({});
-  const [historicalRates, setHistoricalRates] = useState<Record<string, { t: number[]; c: number[] }>>({});
+  const [historicalData, setHistoricalData] = useState<
+    Record<string, { t: number[]; c: number[]; currency: string }>
+  >({});
+  const [historicalRates, setHistoricalRates] = useState<
+    Record<string, { t: number[]; c: number[] }>
+  >({});
   const [isFetchingHistorical, setIsFetchingHistorical] = useState(false);
 
   useEffect(() => {
@@ -218,16 +231,14 @@ export default function Home() {
       try {
         const parsed = JSON.parse(savedPortfolios);
         if (parsed.length > 0) {
-          // eslint-disable-next-line react-hooks/set-state-in-effect
           setPortfolios(parsed);
-          // eslint-disable-next-line react-hooks/set-state-in-effect
           setActivePortfolioId(parsed[0].id);
         }
       } catch (e) {
         console.error("Failed to parse saved portfolios");
       }
     }
-    // eslint-disable-next-line react-hooks/set-state-in-effect
+
     setIsLoaded(true);
   }, []);
 
@@ -240,100 +251,161 @@ export default function Home() {
   useEffect(() => {
     const fetchQuotes = async () => {
       setIsFetchingPrices(true);
-      const currentActivePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
-      if (!currentActivePortfolio || currentActivePortfolio.transactions.length === 0) {
+
+      const currentActivePortfolio =
+        portfolios.find((p) => p.id === activePortfolioId) || portfolios[0];
+
+      if (
+        !currentActivePortfolio ||
+        currentActivePortfolio.transactions.length === 0
+      ) {
         setIsFetchingPrices(false);
         return;
       }
-      const tickersToFetch = Array.from(new Set(currentActivePortfolio.transactions.map(t => t.ticker)));
-      
+
+      const tickersToFetch = Array.from(
+        new Set(currentActivePortfolio.transactions.map((t) => t.ticker)),
+      );
+
       try {
-        const res = await fetch(`/api/yahoo/quote?symbols=${tickersToFetch.join(",")}`);
+        const res = await fetch(
+          `/api/yahoo/quote?symbols=${tickersToFetch.join(",")}`,
+        );
+
         if (res.ok) {
           const data = await res.json();
-          setQuotes(prev => ({ ...prev, ...data.quotes }));
-          setRates(prev => ({ ...prev, ...data.rates }));
+          setQuotes((prev) => ({ ...prev, ...data.quotes }));
+          setRates((prev) => ({ ...prev, ...data.rates }));
         }
       } catch (e) {
         console.error("Failed to fetch quotes", e);
       }
+
       setIsFetchingPrices(false);
     };
-    
+
     fetchQuotes();
+
     const interval = setInterval(fetchQuotes, 60000);
+
     return () => clearInterval(interval);
   }, [portfolios, activePortfolioId]);
 
   useEffect(() => {
-    const currentActivePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
-    if (!currentActivePortfolio || currentActivePortfolio.transactions.length === 0) return;
+    const currentActivePortfolio =
+      portfolios.find((p) => p.id === activePortfolioId) || portfolios[0];
 
-    const earliestDateStr = currentActivePortfolio.transactions.reduce((earliest, t) => {
-      return t.date < earliest ? t.date : earliest;
-    }, currentActivePortfolio.transactions[0].date);
+    if (
+      !currentActivePortfolio ||
+      currentActivePortfolio.transactions.length === 0
+    ) {
+      return;
+    }
 
-    const earliestTimestamp = Math.floor(new Date(earliestDateStr).getTime() / 1000) - (3 * 86400);
+    const earliestDateStr = currentActivePortfolio.transactions.reduce(
+      (earliest, t) => {
+        return t.date < earliest ? t.date : earliest;
+      },
+      currentActivePortfolio.transactions[0].date,
+    );
+
+    const earliestTimestamp =
+      Math.floor(new Date(earliestDateStr).getTime() / 1000) - 3 * 86400;
+
     const currentTimestamp = Math.floor(Date.now() / 1000);
 
-    const tickersToFetch = Array.from(new Set(currentActivePortfolio.transactions.map(t => t.ticker)));
-    
+    const tickersToFetch = Array.from(
+      new Set(currentActivePortfolio.transactions.map((t) => t.ticker)),
+    );
+
     const fetchHistoricalData = async () => {
       setIsFetchingHistorical(true);
+
       try {
-        const res = await fetch(`/api/yahoo/history?symbols=${tickersToFetch.join(",")}&from=${earliestTimestamp}&to=${currentTimestamp}`);
+        const res = await fetch(
+          `/api/yahoo/history?symbols=${tickersToFetch.join(",")}&from=${earliestTimestamp}&to=${currentTimestamp}`,
+        );
+
         if (res.ok) {
           const data = await res.json();
-          setHistoricalData(prev => ({ ...prev, ...data.history }));
-          setHistoricalRates(prev => ({ ...prev, ...data.ratesHistory }));
+          setHistoricalData((prev) => ({ ...prev, ...data.history }));
+          setHistoricalRates((prev) => ({ ...prev, ...data.ratesHistory }));
         }
       } catch (e) {
         console.error("Failed to fetch historical data", e);
       }
+
       setIsFetchingHistorical(false);
     };
 
     fetchHistoricalData();
   }, [portfolios, activePortfolioId]);
 
-  // eslint-disable-next-line react-hooks/purity
   const dynamicChartData = useMemo(() => {
-    // eslint-disable-next-line react-hooks/purity
     const defaultData = { day: [], week: [], month: [], ytd: [], all: [] };
-    const currentActivePortfolio = portfolios.find(p => p.id === activePortfolioId) || portfolios[0];
-    if (!currentActivePortfolio || currentActivePortfolio.transactions.length === 0) return defaultData;
-    
+
+    const currentActivePortfolio =
+      portfolios.find((p) => p.id === activePortfolioId) || portfolios[0];
+
+    if (
+      !currentActivePortfolio ||
+      currentActivePortfolio.transactions.length === 0
+    ) {
+      return defaultData;
+    }
+
     const txs = currentActivePortfolio.transactions;
+
     const earliestDateStr = txs.reduce((earliest, t) => {
       return t.date < earliest ? t.date : earliest;
     }, txs[0].date);
-    
+
     const earliestTime = new Date(`${earliestDateStr}T00:00:00Z`).getTime();
-    // eslint-disable-next-line react-hooks/purity
     const currentTime = Date.now();
-    
+
     const dailyTimestamps: number[] = [];
+
     for (let t = earliestTime; t <= currentTime; t += 86400000) {
-      dailyTimestamps.push(new Date(new Date(t).toISOString().split('T')[0] + 'T00:00:00Z').getTime());
+      dailyTimestamps.push(
+        new Date(
+          new Date(t).toISOString().split("T")[0] + "T00:00:00Z",
+        ).getTime(),
+      );
     }
-    const todayTime = new Date(new Date().toISOString().split('T')[0] + 'T00:00:00Z').getTime();
-    if (dailyTimestamps.length === 0 || dailyTimestamps[dailyTimestamps.length - 1] !== todayTime) {
+
+    const todayTime = new Date(
+      new Date().toISOString().split("T")[0] + "T00:00:00Z",
+    ).getTime();
+
+    if (
+      dailyTimestamps.length === 0 ||
+      dailyTimestamps[dailyTimestamps.length - 1] !== todayTime
+    ) {
       dailyTimestamps.push(todayTime);
     }
-    
-    const sortedTx = [...txs].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    const sortedTx = [...txs].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime(),
+    );
+
     const timelineData: { date: number; label: string; gain: number }[] = [];
-    const currentHoldings: Record<string, { qty: number; investedEur: number }> = {};
-    
+
+    const currentHoldings: Record<
+      string,
+      { qty: number; investedEur: number }
+    > = {};
+
     const getHistoricalValue = (ticker: string, ts: number) => {
       const hData = historicalData[ticker];
       const targetS = Math.floor(ts / 1000);
+
       let closestPrice = quotes[ticker]?.price || 0;
       let currency = quotes[ticker]?.currency || "EUR";
-      
+
       if (hData && hData.t && hData.t.length > 0) {
         currency = hData.currency;
         closestPrice = hData.c[0];
+
         for (let i = 0; i < hData.t.length; i++) {
           if (hData.t[i] <= targetS + 86400) {
             closestPrice = hData.c[i];
@@ -342,12 +414,15 @@ export default function Home() {
           }
         }
       }
-      
+
       let rateToEur = 1;
+
       if (currency !== "EUR") {
         const rData = historicalRates[currency];
+
         if (rData && rData.t && rData.t.length > 0) {
           rateToEur = rData.c[0];
+
           for (let i = 0; i < rData.t.length; i++) {
             if (rData.t[i] <= targetS + 86400) {
               rateToEur = rData.c[i];
@@ -359,72 +434,108 @@ export default function Home() {
           rateToEur = rates[currency] || 1;
         }
       }
-      
+
       return { priceNative: closestPrice, rateToEur };
     };
-    
-    dailyTimestamps.forEach(ts => {
-      const dateStr = new Date(ts).toISOString().split('T')[0];
-      const txsToday = sortedTx.filter(t => t.date === dateStr);
-      
-      txsToday.forEach(tx => {
-        if (!currentHoldings[tx.ticker]) currentHoldings[tx.ticker] = { qty: 0, investedEur: 0 };
+
+    dailyTimestamps.forEach((ts) => {
+      const dateStr = new Date(ts).toISOString().split("T")[0];
+
+      const txsToday = sortedTx.filter((t) => t.date === dateStr);
+
+      txsToday.forEach((tx) => {
+        if (!currentHoldings[tx.ticker]) {
+          currentHoldings[tx.ticker] = { qty: 0, investedEur: 0 };
+        }
+
         const quote = quotes[tx.ticker];
         const currency = quote ? quote.currency : "EUR";
         const rateToEur = rates[currency] || 1;
-        
-        if (tx.action === 'buy') {
+
+        if (tx.action === "buy") {
           currentHoldings[tx.ticker].qty += tx.quantity;
-          const investedNative = (tx.quantity * tx.price) + tx.commission;
+
+          const investedNative = tx.quantity * tx.price + tx.commission;
+
           currentHoldings[tx.ticker].investedEur += investedNative * rateToEur;
-        } else if (tx.action === 'sell') {
+        } else if (tx.action === "sell") {
           if (currentHoldings[tx.ticker].qty > 0) {
-            const avgCostEur = currentHoldings[tx.ticker].investedEur / currentHoldings[tx.ticker].qty;
+            const avgCostEur =
+              currentHoldings[tx.ticker].investedEur /
+              currentHoldings[tx.ticker].qty;
+
             currentHoldings[tx.ticker].investedEur -= tx.quantity * avgCostEur;
+
             currentHoldings[tx.ticker].qty -= tx.quantity;
           }
         }
       });
-      
+
       let totalValueEur = 0;
       let totalInvestedEur = 0;
+
       for (const [ticker, holding] of Object.entries(currentHoldings)) {
         if (holding.qty > 0) {
           const { priceNative, rateToEur } = getHistoricalValue(ticker, ts);
-          totalValueEur += (holding.qty * priceNative) * rateToEur;
+
+          totalValueEur += holding.qty * priceNative * rateToEur;
           totalInvestedEur += holding.investedEur;
         }
       }
-      
+
       const gain = totalValueEur - totalInvestedEur;
+
       timelineData.push({
         date: ts,
-        label: new Date(ts).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' }),
+        label: new Date(ts).toLocaleDateString(undefined, {
+          month: "short",
+          day: "numeric",
+          year: "numeric",
+        }),
         gain: Math.round(gain * 100) / 100,
       });
     });
-    
+
     const all = timelineData;
-    
+
     const currentYear = new Date().getFullYear();
     const ytdStart = new Date(`${currentYear}-01-01T00:00:00Z`).getTime();
-    let ytd = timelineData.filter(d => d.date >= ytdStart);
-    if (ytd.length === 0 && timelineData.length > 0) ytd = [timelineData[timelineData.length - 1]];
-    
+
+    let ytd = timelineData.filter((d) => d.date >= ytdStart);
+
+    if (ytd.length === 0 && timelineData.length > 0) {
+      ytd = [timelineData[timelineData.length - 1]];
+    }
+
     const monthStart = new Date();
     monthStart.setMonth(monthStart.getMonth() - 1);
-    let month = timelineData.filter(d => d.date >= monthStart.getTime());
-    if (month.length === 0 && timelineData.length > 0) month = [timelineData[timelineData.length - 1]];
-    
+
+    let month = timelineData.filter((d) => d.date >= monthStart.getTime());
+
+    if (month.length === 0 && timelineData.length > 0) {
+      month = [timelineData[timelineData.length - 1]];
+    }
+
     const weekStart = new Date();
     weekStart.setDate(weekStart.getDate() - 7);
-    let week = timelineData.filter(d => d.date >= weekStart.getTime());
-    if (week.length === 0 && timelineData.length > 0) week = [timelineData[timelineData.length - 1]];
-    
-    const day = week; // Fallback for intraday
-    
+
+    let week = timelineData.filter((d) => d.date >= weekStart.getTime());
+
+    if (week.length === 0 && timelineData.length > 0) {
+      week = [timelineData[timelineData.length - 1]];
+    }
+
+    const day = week;
+
     return { day, week, month, ytd, all };
-  }, [portfolios, activePortfolioId, historicalData, historicalRates, quotes, rates]);
+  }, [
+    portfolios,
+    activePortfolioId,
+    historicalData,
+    historicalRates,
+    quotes,
+    rates,
+  ]);
 
   const activePortfolio =
     portfolios.find((portfolio) => portfolio.id === activePortfolioId) ||
@@ -433,6 +544,7 @@ export default function Home() {
   const transactions = activePortfolio.transactions;
 
   const [isRenamingPortfolio, setIsRenamingPortfolio] = useState(false);
+
   const [portfolioNameInput, setPortfolioNameInput] = useState(
     activePortfolio.name,
   );
@@ -440,6 +552,7 @@ export default function Home() {
   const [timeFrame, setTimeFrame] = useState<TimeFrame>("day");
   const [openViewMode, setOpenViewMode] = useState<ViewMode>("simple");
   const [closedViewMode, setClosedViewMode] = useState<ViewMode>("simple");
+
   const [portfolioCardMode, setPortfolioCardMode] = useState<
     "value" | "invested"
   >("value");
@@ -452,8 +565,10 @@ export default function Home() {
 
   const [action, setAction] = useState<TransactionAction>("buy");
   const [assetType, setAssetType] = useState<AssetType>("stock");
+
   const [derivativeType, setDerivativeType] =
     useState<DerivativeType>("knockout");
+
   const [name, setName] = useState("");
   const [ticker, setTicker] = useState("");
   const [quantity, setQuantity] = useState("");
@@ -464,13 +579,18 @@ export default function Home() {
   useEffect(() => {
     if (ticker.trim().length >= 2) {
       const existingQuote = quotes[ticker.toUpperCase()];
+
       if (existingQuote) {
         setFormCurrency(existingQuote.currency);
       } else {
         const fetchQuote = async () => {
           try {
-            const res = await fetch(`/api/yahoo/quote?symbols=${ticker.toUpperCase()}`);
+            const res = await fetch(
+              `/api/yahoo/quote?symbols=${ticker.toUpperCase()}`,
+            );
+
             const data = await res.json();
+
             if (data.quotes && data.quotes[ticker.toUpperCase()]) {
               setFormCurrency(data.quotes[ticker.toUpperCase()].currency);
             } else {
@@ -480,6 +600,7 @@ export default function Home() {
             setFormCurrency(null);
           }
         };
+
         fetchQuote();
       }
     } else {
@@ -518,6 +639,12 @@ export default function Home() {
   );
 
   const allTimeGain = openTotalGain + closedTotalGain;
+
+  const dayGainPercent =
+    amountInvested > 0 ? (dayGainEuro / amountInvested) * 100 : 0;
+
+  const allTimeGainPercent =
+    amountInvested > 0 ? (allTimeGain / amountInvested) * 100 : 0;
 
   const allocationData = openHoldings.map((holding) => ({
     name: holding.name,
@@ -701,16 +828,16 @@ export default function Home() {
                 >
                   +
                 </button>
-
-
               </div>
             )}
 
-
-
             <p className="mt-4 text-slate-300">
               Track your stocks, ETFs, and derivatives in one place.
-              {isFetchingPrices && <span className="ml-3 text-emerald-500 text-sm animate-pulse">Fetching live prices...</span>}
+              {isFetchingPrices && (
+                <span className="ml-3 text-emerald-500 text-sm animate-pulse">
+                  Fetching live prices...
+                </span>
+              )}
             </p>
           </div>
 
@@ -720,6 +847,7 @@ export default function Home() {
               value={activePortfolioId}
               onChange={(event) => {
                 const selectedId = Number(event.target.value);
+
                 const selectedPortfolio = portfolios.find(
                   (portfolio) => portfolio.id === selectedId,
                 );
@@ -781,13 +909,27 @@ export default function Home() {
 
           <div className="rounded-2xl bg-slate-900 p-6">
             <p className="text-sm text-slate-400">Day Gain</p>
-            <p className="mt-2 text-3xl font-bold">{formatEuro(dayGainEuro)}</p>
+
+            <p className="mt-2 text-3xl font-bold">
+              {formatEuro(dayGainEuro)}{" "}
+              <span className={`text-lg ${getGainColor(dayGainPercent)}`}>
+                ({formatPercent(dayGainPercent)})
+              </span>
+            </p>
+
             <p className="mt-1 text-sm text-slate-400">Open holdings only</p>
           </div>
 
           <div className="rounded-2xl bg-slate-900 p-6">
             <p className="text-sm text-slate-400">All-Time Gain</p>
-            <p className="mt-2 text-3xl font-bold">{formatEuro(allTimeGain)}</p>
+
+            <p className="mt-2 text-3xl font-bold">
+              {formatEuro(allTimeGain)}{" "}
+              <span className={`text-lg ${getGainColor(allTimeGainPercent)}`}>
+                ({formatPercent(allTimeGainPercent)})
+              </span>
+            </p>
+
             <p className="mt-1 text-sm text-slate-400">
               Open + closed holdings
             </p>
@@ -799,7 +941,11 @@ export default function Home() {
             <div className="flex flex-wrap items-center justify-between gap-4">
               <h2 className="text-2xl font-bold flex items-center gap-3">
                 Gain Chart
-                {isFetchingHistorical && <span className="text-sm font-normal text-emerald-500 animate-pulse">Loading historical data...</span>}
+                {isFetchingHistorical && (
+                  <span className="text-sm font-normal text-emerald-500 animate-pulse">
+                    Loading historical data...
+                  </span>
+                )}
               </h2>
 
               <div className="flex flex-wrap gap-2">
@@ -1025,7 +1171,9 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="text-sm text-slate-400">Price {formCurrency ? `(${formCurrency})` : ""}</label>
+                <label className="text-sm text-slate-400">
+                  Price {formCurrency ? `(${formCurrency})` : ""}
+                </label>
                 <input
                   type="number"
                   step="any"
@@ -1038,7 +1186,9 @@ export default function Home() {
               </div>
 
               <div>
-                <label className="text-sm text-slate-400">Commission {formCurrency ? `(${formCurrency})` : ""}</label>
+                <label className="text-sm text-slate-400">
+                  Commission {formCurrency ? `(${formCurrency})` : ""}
+                </label>
                 <input
                   type="number"
                   step="any"
@@ -1090,18 +1240,18 @@ export default function Home() {
                 <tr>
                   <th className="pb-3">Name</th>
                   <th className="pb-3">Ticker</th>
+                  <th className="pb-3">Type</th>
                   <th className="pb-3">Current Price</th>
                   <th className="pb-3">Day Gain</th>
+                  <th className="pb-3">Total Gain</th>
 
                   {openEditMode && <th className="pb-3">Actions</th>}
 
                   {openViewMode === "extended" && (
                     <>
-                      <th className="pb-3">Type</th>
                       <th className="pb-3">Quantity</th>
                       <th className="pb-3">Average Price</th>
                       <th className="pb-3">Acquisition Date</th>
-                      <th className="pb-3">Total Gain</th>
                     </>
                   )}
                 </tr>
@@ -1115,11 +1265,20 @@ export default function Home() {
                   >
                     <td className="py-4 font-medium">{holding.name}</td>
                     <td className="py-4">{holding.ticker}</td>
-                    <td className="py-4">{formatCurrency(holding.currentPrice, holding.currency)}</td>
+                    <td className="py-4">{holding.type}</td>
+                    <td className="py-4">
+                      {formatCurrency(holding.currentPrice, holding.currency)}
+                    </td>
                     <td className="py-4">
                       {formatEuro(holding.dayGainEuro)}{" "}
-                      <span className="text-slate-400">
+                      <span className={getGainColor(holding.dayGainPercent)}>
                         ({formatPercent(holding.dayGainPercent)})
+                      </span>
+                    </td>
+                    <td className="py-4">
+                      {formatEuro(holding.totalGainEuro)}{" "}
+                      <span className={getGainColor(holding.totalGainPercent)}>
+                        ({formatPercent(holding.totalGainPercent)})
                       </span>
                     </td>
 
@@ -1145,18 +1304,14 @@ export default function Home() {
 
                     {openViewMode === "extended" && (
                       <>
-                        <td className="py-4">{holding.type}</td>
                         <td className="py-4">{holding.quantity}</td>
                         <td className="py-4">
-                          {formatCurrency(holding.averagePrice, holding.currency)}
+                          {formatCurrency(
+                            holding.averagePrice,
+                            holding.currency,
+                          )}
                         </td>
                         <td className="py-4">{holding.acquisitionDate}</td>
-                        <td className="py-4">
-                          {formatEuro(holding.totalGainEuro)}{" "}
-                          <span className="text-slate-400">
-                            ({formatPercent(holding.totalGainPercent)})
-                          </span>
-                        </td>
                       </>
                     )}
                   </tr>
@@ -1218,6 +1373,7 @@ export default function Home() {
                 <tr>
                   <th className="pb-3">Name</th>
                   <th className="pb-3">Ticker</th>
+                  <th className="pb-3">Type</th>
                   <th className="pb-3">Sell Price</th>
                   <th className="pb-3">Realized Gain</th>
 
@@ -1225,7 +1381,6 @@ export default function Home() {
 
                   {closedViewMode === "extended" && (
                     <>
-                      <th className="pb-3">Type</th>
                       <th className="pb-3">Quantity</th>
                       <th className="pb-3">Average Price</th>
                       <th className="pb-3">Acquisition Date</th>
@@ -1243,10 +1398,15 @@ export default function Home() {
                   >
                     <td className="py-4 font-medium">{holding.name}</td>
                     <td className="py-4">{holding.ticker}</td>
-                    <td className="py-4">{formatCurrency(holding.sellPrice, holding.currency)}</td>
+                    <td className="py-4">{holding.type}</td>
+                    <td className="py-4">
+                      {formatCurrency(holding.sellPrice, holding.currency)}
+                    </td>
                     <td className="py-4">
                       {formatEuro(holding.realizedGainEuro)}{" "}
-                      <span className="text-slate-400">
+                      <span
+                        className={getGainColor(holding.realizedGainPercent)}
+                      >
                         ({formatPercent(holding.realizedGainPercent)})
                       </span>
                     </td>
@@ -1273,10 +1433,12 @@ export default function Home() {
 
                     {closedViewMode === "extended" && (
                       <>
-                        <td className="py-4">{holding.type}</td>
                         <td className="py-4">{holding.quantity}</td>
                         <td className="py-4">
-                          {formatCurrency(holding.averagePrice, holding.currency)}
+                          {formatCurrency(
+                            holding.averagePrice,
+                            holding.currency,
+                          )}
                         </td>
                         <td className="py-4">{holding.acquisitionDate}</td>
                         <td className="py-4">{holding.sellingDate}</td>
